@@ -1,0 +1,64 @@
+@import url('https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;600;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --text-xs: 12px;
+  --text-xs--line-height: 16px;
+  --text-sm: 14px;
+  --text-sm--line-height: 20px;
+  --text-base: 16px;
+  --text-base--line-height: 24px;
+  --text-lg: 18px;
+  --text-lg--line-height: 28px;
+  --text-xl: 20px;
+  --text-xl--line-height: 28px;
+  --text-2xl: 24px;
+  --text-2xl--line-height: 32px;
+  --text-3xl: 30px;
+  --text-3xl--line-height: 36px;
+  --text-4xl: 36px;
+  --text-4xl--line-height: 40px;
+  --font-sans: "Be Vietnam Pro", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+}
+
+:root {
+  color-scheme: light dark;
+  --bg: #f7f5f0;
+  --surface: #ffffff;
+  --surface-alt: #efece4;
+  --text: #16233f;
+  --dim: #5b6472;
+  --border: #ddd8ca;
+  --accent: #d98e1b;
+  --accent-ink: #8a5a08;
+  --done: #1e7a4f;
+  --learn: #2563eb;
+  --review: #c2410c;
+  --radius: 12px;
+  --space-surface: var(--surface);
+  --space-surface-alt: var(--surface-alt);
+  --space-muted: var(--dim);
+  --space-border: var(--border);
+  --space-accent: var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #101623;
+    --surface: #1a2338;
+    --surface-alt: #232f4a;
+    --text: #eef1f7;
+    --dim: #9aa5b8;
+    --border: #2e3a56;
+    --accent: #e8a93d;
+    --accent-ink: #e8a93d;
+    --done: #3fae74;
+    --learn: #6ea8ff;
+    --review: #ff9a62;
+  }
+}
+
+body {
+  font-family: var(--font-sans);
+}
