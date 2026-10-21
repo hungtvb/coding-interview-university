@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type ApiResponse } from "./api";
 import { CATALOG, type CatalogItem } from "./data/catalog";
 import { BUILTIN_CARDS } from "./data/flashcards";
+import { VideoPlayer, findYouTubeEmbed } from "./VideoPlayer";
 
 type State = ApiResponse<typeof api, "getState">;
 type Status = "todo" | "learning" | "done" | "review";
@@ -150,15 +151,52 @@ export function App() {
   const statusOf = useMemo(() => {
     const map = new Map<string, Status>();
     const noteMap = new Map<string, string>();
+    const watchMap = new Map<string, { pct: number; pos: number }>();
     for (const p of data?.progress ?? []) {
       map.set(p.item_key, p.status);
       noteMap.set(p.item_key, p.note);
+      watchMap.set(p.item_key, {
+        pct: p.watched_pct ?? 0,
+        pos: p.position_sec ?? 0,
+      });
     }
     return {
       get: (key: string): Status => map.get(key) ?? "todo",
       note: (key: string): string => noteMap.get(key) ?? "",
+      watch: (key: string): { pct: number; pos: number } =>
+        watchMap.get(key) ?? { pct: 0, pos: 0 },
     };
   }, [data]);
+
+  // Watch progress drives learning state: first play moves todo -> learning,
+  // reaching >=90% (or the video ending) marks the item done. An item the
+  // user flagged "review" keeps that status; its watch % still updates.
+  const handleWatchProgress = (itemKey: string, pct: number, posSec: number, ended: boolean) => {
+    const finalPct = ended ? 100 : pct;
+    void api.setWatchProgress({ itemKey, pct: finalPct, positionSec: posSec });
+    queryClient.setQueryData<State>(["state"], (old) => {
+      if (!old) return old;
+      const exists = old.progress.some((p) => p.item_key === itemKey);
+      const progress = exists
+        ? old.progress.map((p) =>
+            p.item_key === itemKey
+              ? { ...p, watched_pct: Math.max(p.watched_pct ?? 0, finalPct), position_sec: posSec }
+              : p,
+          )
+        : [
+            ...old.progress,
+            { item_key: itemKey, status: "todo" as Status, note: "", watched_pct: finalPct, position_sec: posSec },
+          ];
+      return { ...old, progress };
+    });
+    const cur = statusOf.get(itemKey);
+    if (finalPct > 0 && cur === "todo" && !ended && finalPct < 90) {
+      setStatus.mutate({ itemKey, status: "learning" });
+    }
+    if ((ended || finalPct >= 90) && (cur === "todo" || cur === "learning")) {
+      setStatus.mutate({ itemKey, status: "done" });
+    }
+  };
 
   const counts = useMemo(() => {
     let done = 0, learning = 0, review = 0;
@@ -247,6 +285,7 @@ export function App() {
                 statusOf={statusOf}
                 onSetStatus={(key, s) => setStatus.mutate({ itemKey: key, status: s })}
                 onSaveNote={(key, note) => setNote.mutate({ itemKey: key, note })}
+                onWatchProgress={handleWatchProgress}
               />
             )}
             {tab === "cards" && (
@@ -291,7 +330,10 @@ export function App() {
 interface StatusAccess {
   get: (key: string) => Status;
   note: (key: string) => string;
+  watch: (key: string) => { pct: number; pos: number };
 }
+
+type WatchProgressHandler = (key: string, pct: number, posSec: number, ended: boolean) => void;
 
 function TodayView(props: {
   counts: { done: number; learning: number; review: number; total: number };
@@ -401,6 +443,16 @@ function TodayView(props: {
                     {chapterShort(item.chapter)}{item.topic ? ` · ${item.topic}` : ""} · mục #{item.n}
                     {statusOf.get(item.key) === "learning" ? " · đang học dở" : ""}
                   </p>
+                  {(findYouTubeEmbed(item) !== null || statusOf.watch(item.key).pct > 0) && (
+                    <p className="mt-1 flex flex-wrap items-center gap-2 text-xs">
+                      {findYouTubeEmbed(item) !== null && (
+                        <span className="rounded-full bg-[var(--surface-alt)] px-2 py-0.5 font-semibold text-[var(--accent-ink)]">▶ Video</span>
+                      )}
+                      {statusOf.watch(item.key).pct > 0 && (
+                        <span className="font-mono text-[var(--dim)]">{Math.round(statusOf.watch(item.key).pct)}% đã xem</span>
+                      )}
+                    </p>
+                  )}
                   {item.links[0] && (
                     <a href={item.links[0].url} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-xs font-semibold text-[var(--accent-ink)] underline decoration-dotted underline-offset-2">
                       Mở tài liệu <ExternalIcon className="h-3 w-3" />
@@ -541,6 +593,7 @@ function RoadmapView(props: {
   statusOf: StatusAccess;
   onSetStatus: (key: string, s: Status) => void;
   onSaveNote: (key: string, note: string) => void;
+  onWatchProgress: WatchProgressHandler;
 }) {
   const [query, setQuery] = useState("");
   const [filter, setFilter] = useState<Status | "all">("all");
@@ -565,7 +618,7 @@ function RoadmapView(props: {
   return (
     <div className="pt-5">
       <h2 className="text-xl font-bold">Lộ trình 463 mục</h2>
-      <p className="mt-1 text-sm text-[var(--dim)]">Đúng thứ tự README gốc của Washam. Chạm vào một mục để đổi trạng thái, mở tài liệu và ghi chú.</p>
+      <p className="mt-1 text-sm text-[var(--dim)]">Đúng thứ tự README gốc của Washam. Chạm vào một mục để xem video ngay trong trang — tiến độ được tính theo phần trăm video đã xem — ghi chú và mở tài liệu.</p>
 
       <div className="sticky top-0 z-10 -mx-4 mt-3 bg-[var(--bg)] px-4 pb-2 pt-1">
         <label className="sr-only" htmlFor="search-items">Tìm mục học</label>
@@ -625,10 +678,13 @@ function RoadmapView(props: {
                       item={item}
                       status={props.statusOf.get(item.key)}
                       note={props.statusOf.note(item.key)}
+                      watchedPct={props.statusOf.watch(item.key).pct}
+                      positionSec={props.statusOf.watch(item.key).pos}
                       expanded={expanded === item.key}
                       onToggleExpand={() => setExpanded(expanded === item.key ? null : item.key)}
                       onSetStatus={props.onSetStatus}
                       onSaveNote={props.onSaveNote}
+                      onWatchProgress={props.onWatchProgress}
                     />
                   ))}
                   {(searching ? visible : items).length === 0 && (
@@ -651,15 +707,28 @@ function ItemRow(props: {
   item: CatalogItem;
   status: Status;
   note: string;
+  watchedPct: number;
+  positionSec: number;
   expanded: boolean;
   onToggleExpand: () => void;
   onSetStatus: (key: string, s: Status) => void;
   onSaveNote: (key: string, note: string) => void;
+  onWatchProgress: WatchProgressHandler;
 }) {
   const { item, status } = props;
   const [noteDraft, setNoteDraft] = useState(props.note);
   const [noteSaved, setNoteSaved] = useState(false);
   useEffect(() => { setNoteDraft(props.note); }, [props.note, props.expanded]);
+
+  const embed = findYouTubeEmbed(item);
+  const looksLikeVideo = item.links.some((l) => l.label.includes("(video)"));
+
+  const saveNoteDraft = () => {
+    if (noteDraft === props.note) return;
+    props.onSaveNote(item.key, noteDraft);
+    setNoteSaved(true);
+    window.setTimeout(() => setNoteSaved(false), 2000);
+  };
 
   const isDone = status === "done";
   return (
@@ -684,6 +753,12 @@ function ItemRow(props: {
             {item.links.length > 0 && <span>{item.links.length} tài liệu</span>}
             {props.note && <span>có ghi chú</span>}
           </p>
+          {props.watchedPct > 0 && (
+            <span className="mt-1.5 flex items-center gap-2 pr-1">
+              <ProgressBar pct={props.watchedPct} className="h-1 flex-1" />
+              <span className="shrink-0 font-mono text-[11px] text-[var(--dim)]">{Math.round(props.watchedPct)}% đã xem</span>
+            </span>
+          )}
         </button>
         <ChevronIcon open={props.expanded} className="mt-1 h-4 w-4 shrink-0 text-[var(--dim)]" />
       </div>
@@ -700,34 +775,62 @@ function ItemRow(props: {
               </button>
             ))}
           </div>
-          {item.links.length > 0 && (
-            <ul className="mt-3 space-y-1.5">
-              {item.links.map((l, idx) => (
-                <li key={`${l.url}-${idx}`}>
-                  <a href={l.url} target="_blank" rel="noreferrer" className="flex items-start gap-1.5 text-sm font-medium text-[var(--accent-ink)] underline decoration-dotted underline-offset-2">
-                    <ExternalIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-                    <span className="min-w-0">{l.label}</span>
-                  </a>
-                </li>
-              ))}
-            </ul>
-          )}
+          {embed ? (
+            <div className="mt-3">
+              <VideoPlayer
+                itemKey={item.key}
+                embed={embed}
+                startSec={props.positionSec}
+                startPct={props.watchedPct}
+                onProgress={(pct, pos, ended) => props.onWatchProgress(item.key, pct, pos, ended)}
+              />
+            </div>
+          ) : looksLikeVideo && props.watchedPct < 100 ? (
+            <div className="mt-3 rounded-xl bg-[var(--surface)] p-3 ring-1 ring-[var(--border)]">
+              <p className="text-xs text-[var(--dim)]">Mục này không có video YouTube để phát ngay trong trang. Xem ở tài liệu bên dưới rồi đánh dấu tại đây:</p>
+              <button
+                type="button"
+                onClick={() => props.onWatchProgress(item.key, 100, props.positionSec, true)}
+                className="mt-2 rounded-lg bg-[var(--accent)] px-3.5 py-2 text-xs font-bold text-white"
+              >
+                Đánh dấu đã xem/xong
+              </button>
+            </div>
+          ) : null}
           <label className="mt-3 block">
             <span className="text-xs font-semibold text-[var(--dim)]">Ghi chú của bạn</span>
             <textarea
-              value={noteDraft} onChange={(e) => setNoteDraft(e.target.value)} rows={2}
+              value={noteDraft}
+              onChange={(e) => setNoteDraft(e.target.value)}
+              onBlur={saveNoteDraft}
+              rows={2}
               aria-label={`Ghi chú cho mục ${item.title}`}
-              placeholder="Tự code lại tới đâu rồi, còn vướng gì…"
+              placeholder="Ghi chú khi xem video..."
               className="mt-1 w-full rounded-lg border border-[var(--border)] bg-[var(--surface)] px-3 py-2 text-sm outline-none focus:border-[var(--accent)]"
             />
           </label>
           <button
             type="button"
-            onClick={() => { props.onSaveNote(item.key, noteDraft); setNoteSaved(true); window.setTimeout(() => setNoteSaved(false), 2000); }}
+            onClick={saveNoteDraft}
             className="mt-2 rounded-lg bg-[var(--accent)] px-3.5 py-2 text-xs font-bold text-white"
           >
             {noteSaved ? "Đã lưu ✓" : "Lưu ghi chú"}
           </button>
+          {item.links.length > 0 && (
+            <>
+              <p className="mt-4 text-xs font-semibold text-[var(--dim)]">Tài liệu của mục này</p>
+              <ul className="mt-1.5 space-y-1.5">
+                {item.links.map((l, idx) => (
+                  <li key={`${l.url}-${idx}`}>
+                    <a href={l.url} target="_blank" rel="noreferrer" className="flex items-start gap-1.5 text-sm font-medium text-[var(--accent-ink)] underline decoration-dotted underline-offset-2">
+                      <ExternalIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      <span className="min-w-0">{l.label}</span>
+                    </a>
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
       )}
     </li>
