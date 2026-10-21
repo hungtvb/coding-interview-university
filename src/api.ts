@@ -12,6 +12,10 @@ export interface ProgressEntry {
   item_key: string;
   status: ItemStatus;
   note: string;
+  /** Max watch percentage ever reached (0-100) for video items. */
+  watched_pct: number;
+  /** Last playback position in seconds, for resume. */
+  position_sec: number;
 }
 
 export interface CustomCard {
@@ -56,6 +60,26 @@ const DEFAULT_STATE: StoredState = {
   nextCardId: 1,
 };
 
+const STATUSES: ItemStatus[] = ["todo", "learning", "done", "review"];
+
+function normalizeProgressEntry(raw: unknown): ProgressEntry | null {
+  if (!raw || typeof raw !== "object") return null;
+  const e = raw as Partial<ProgressEntry>;
+  if (typeof e.item_key !== "string" || !e.item_key) return null;
+  const num = (v: unknown): number =>
+    typeof v === "number" && Number.isFinite(v) ? v : 0;
+  return {
+    item_key: e.item_key,
+    status: STATUSES.includes(e.status as ItemStatus)
+      ? (e.status as ItemStatus)
+      : "todo",
+    note: typeof e.note === "string" ? e.note : "",
+    // Entries saved before watch tracking existed simply default to 0.
+    watched_pct: Math.min(100, Math.max(0, num(e.watched_pct))),
+    position_sec: Math.max(0, num(e.position_sec)),
+  };
+}
+
 function loadState(): StoredState {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
@@ -69,7 +93,11 @@ function loadState(): StoredState {
       0,
     );
     return {
-      progress: Array.isArray(parsed.progress) ? parsed.progress : [],
+      progress: Array.isArray(parsed.progress)
+        ? parsed.progress
+            .map(normalizeProgressEntry)
+            .filter((p): p is ProgressEntry => p !== null)
+        : [],
       customCards,
       reviews: Array.isArray(parsed.reviews) ? parsed.reviews : [],
       studyDays: Array.isArray(parsed.studyDays) ? parsed.studyDays : [],
@@ -119,6 +147,8 @@ export const api = {
         item_key: args.itemKey,
         status: args.status,
         note: "",
+        watched_pct: 0,
+        position_sec: 0,
       });
     }
     saveState(state);
@@ -138,6 +168,34 @@ export const api = {
         item_key: args.itemKey,
         status: "todo",
         note: args.note,
+        watched_pct: 0,
+        position_sec: 0,
+      });
+    }
+    saveState(state);
+    return { ok: true };
+  },
+
+  async setWatchProgress(args: {
+    itemKey: string;
+    pct: number;
+    positionSec: number;
+  }): Promise<{ ok: true }> {
+    const state = loadState();
+    const pct = Math.min(100, Math.max(0, args.pct));
+    const pos = Math.max(0, args.positionSec);
+    const existing = state.progress.find((p) => p.item_key === args.itemKey);
+    if (existing) {
+      // watched_pct is the max ever reached — never let it go backwards.
+      existing.watched_pct = Math.max(existing.watched_pct, pct);
+      existing.position_sec = pos;
+    } else {
+      state.progress.push({
+        item_key: args.itemKey,
+        status: "todo",
+        note: "",
+        watched_pct: pct,
+        position_sec: pos,
       });
     }
     saveState(state);
