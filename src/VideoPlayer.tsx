@@ -8,7 +8,7 @@
 // state is reported as 100%. If a saved position exists (>5s, <90% seen)
 // playback resumes from there via playerVars.start.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import type { CatalogItem } from "./data/catalog";
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -93,6 +93,12 @@ function loadYouTubeApi(): Promise<YTNamespace> {
   return apiPromise;
 }
 
+/** Imperative handle exposed to siblings (live captions seek/timestamps). */
+export interface VideoPlayerHandle {
+  getCurrentTime: () => number;
+  seekTo: (sec: number) => void;
+}
+
 export function VideoPlayer(props: {
   itemKey: string;
   embed: YouTubeEmbed;
@@ -102,9 +108,35 @@ export function VideoPlayer(props: {
   startPct: number;
   /** Throttled progress reports; `ended` is true only on the ENDED state. */
   onProgress: (pct: number, posSec: number, ended: boolean) => void;
+  /** Optional ref filled with {getCurrentTime, seekTo} once created. */
+  apiRef?: RefObject<VideoPlayerHandle | null>;
 }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const playerRef = useRef<YTPlayer>(null);
+
+  // Expose a stable imperative handle for siblings (live captions read the
+  // video clock when speech starts and seek when a transcript chip is hit).
+  const apiRef = props.apiRef;
+  useEffect(() => {
+    if (!apiRef) return;
+    apiRef.current = {
+      getCurrentTime: () => {
+        const p = playerRef.current;
+        if (!p || typeof p.getCurrentTime !== "function") return 0;
+        const t = Number(p.getCurrentTime());
+        return Number.isFinite(t) && t > 0 ? t : 0;
+      },
+      seekTo: (sec: number) => {
+        const p = playerRef.current;
+        if (!p || typeof p.seekTo !== "function") return;
+        p.seekTo(Math.max(0, sec), true);
+        if (typeof p.playVideo === "function") p.playVideo();
+      },
+    };
+    return () => {
+      if (apiRef.current) apiRef.current = null;
+    };
+  }, [apiRef]);
   const cbRef = useRef(props.onProgress);
   cbRef.current = props.onProgress;
   const lastSentRef = useRef({ pct: props.startPct, pos: props.startSec });
