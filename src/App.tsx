@@ -1,9 +1,17 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, type ApiResponse } from "./api";
 import { CATALOG, type CatalogItem } from "./data/catalog";
 import { BUILTIN_CARDS } from "./data/flashcards";
-import { VideoPlayer, findYouTubeEmbed } from "./VideoPlayer";
+import {
+  VideoPlayer,
+  findYouTubeEmbed,
+  type VideoPlayerHandle,
+} from "./VideoPlayer";
+
+// Live Vietnamese captions are heavy (Whisper worker + model): load the
+// chunk only when a learner actually opens an item that has a video.
+const LiveCaptions = lazy(() => import("./livecaptions/LiveCaptions"));
 
 type State = ApiResponse<typeof api, "getState">;
 type Status = "todo" | "learning" | "done" | "review";
@@ -722,10 +730,23 @@ function ItemRow(props: {
 
   const embed = findYouTubeEmbed(item);
   const looksLikeVideo = item.links.some((l) => l.label.includes("(video)"));
+  const playerApiRef = useRef<VideoPlayerHandle | null>(null);
 
   const saveNoteDraft = () => {
     if (noteDraft === props.note) return;
     props.onSaveNote(item.key, noteDraft);
+    setNoteSaved(true);
+    window.setTimeout(() => setNoteSaved(false), 2000);
+  };
+
+  // Live captions append their transcript to this item's note, going
+  // through the same draft + save flow as manual edits.
+  const appendTranscriptToNote = (text: string) => {
+    const combined = noteDraft.trim()
+      ? `${noteDraft.replace(/\s+$/, "")}\n\n${text}`
+      : text;
+    setNoteDraft(combined);
+    props.onSaveNote(item.key, combined);
     setNoteSaved(true);
     window.setTimeout(() => setNoteSaved(false), 2000);
   };
@@ -783,7 +804,22 @@ function ItemRow(props: {
                 startSec={props.positionSec}
                 startPct={props.watchedPct}
                 onProgress={(pct, pos, ended) => props.onWatchProgress(item.key, pct, pos, ended)}
+                apiRef={playerApiRef}
               />
+              <Suspense
+                fallback={
+                  <p className="mt-3 text-xs text-[var(--dim)]">
+                    Đang tải tính năng phụ đề trực tiếp…
+                  </p>
+                }
+              >
+                <LiveCaptions
+                  itemKey={item.key}
+                  getVideoTime={() => playerApiRef.current?.getCurrentTime() ?? 0}
+                  onSeek={(sec) => playerApiRef.current?.seekTo(sec)}
+                  onSaveTranscript={appendTranscriptToNote}
+                />
+              </Suspense>
             </div>
           ) : looksLikeVideo && props.watchedPct < 100 ? (
             <div className="mt-3 rounded-xl bg-[var(--surface)] p-3 ring-1 ring-[var(--border)]">
